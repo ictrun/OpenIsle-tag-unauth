@@ -66,9 +66,9 @@ In DIRECT mode (common default), an attacker can:
 - `PUT /api/tags/{id}` - **Privilege escalation: Regular user can modify ANY tag (including tags created by others or admins)**
 
 ## Proof of Concept
-
+1. PoC
 <img width="991" height="454" alt="image" src="https://github.com/user-attachments/assets/7ed30dbf-4386-4624-8dde-06d000f04176" />
-
+2. After request
 <img width="1000" height="458" alt="image" src="https://github.com/user-attachments/assets/f9f57ac4-b6f9-45da-ac5b-bfaf0a57cfe1" />
-
+3. Frontend
 <img width="325" height="165" alt="image" src="https://github.com/user-attachments/assets/a8b67eb0-2fd8-437e-98bb-a3c4ab0799c5" />
